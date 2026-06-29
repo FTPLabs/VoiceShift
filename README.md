@@ -1,91 +1,93 @@
 # VoiceShift
 
-Lightweight real-time voice changer. Single portable `.exe`, runs in system tray, zero installer.
+Real-time voice processing — browser-based audio processor. No install required, works in any modern browser.
 
 ## Features
 
-- **Pitch shift** ±12 semitones
-- **Formant shift** (gender / size feel)
-- **Robotic / vocoder** effect
-- **Noise gate** — silence background hiss
-- **Per-app bypass** — e.g. disable voice change in Discord
-- **Presets** — save / switch profiles instantly
-- **Autostart** — Windows registry integration
-- **System tray** — invisible, always running
+- **Pitch Shift** — ±12 semitones
+- **Formant Shift** — gender / size feel (0.5× to 2.0×)
+- **Robotic / Comb Effect** — 0–100%
+- **Noise Gate** — hard silence gate (-80 to -10 dB)
+- **High-Pass Filter** — remove low-freq rumble (20–500 Hz)
+- **Low-Pass Filter** — remove high-freq hiss (2000–20000 Hz)
+- **Dynamics Compressor** — threshold and ratio control
+- **Output Gain** — 0–200%
+- **Real-time VU Meters** — input and output levels
+- **Frequency Spectrum Analyzer** — live canvas visualization
+- **Self-monitoring** — hear your processed voice through headphones
+- **Preset Management** — save, load, delete named presets (synced to server)
+- **Device Selection** — choose any connected microphone
 
-## Requirements
+## Quick Start (Web App)
 
-| Item | Notes |
-|------|-------|
-| Windows 10 / 11 x64 | Required |
-| [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) | **Free** — lets other apps receive your processed voice |
-
-> VB-Cable creates a virtual microphone. Set **VoiceShift Output → CABLE Input** and in Discord/game set microphone to **CABLE Output**.
-
-## Quick Start
-
-1. Install VB-Audio Virtual Cable (one-time, free)
-2. Download `VoiceShift.exe` from [Releases](../../releases)
-3. Run it — icon appears in system tray
-4. Set **Input** = your real microphone, **Output** = CABLE Input (VB-Audio)
-5. Adjust sliders, save a preset
-6. Enable **Autostart** so it runs on boot
-
-## Per-App Bypass
-
-In each preset's **"Bypass for apps"** field, add process names separated by commas:
-
-```
-discord.exe, chrome.exe, spotify.exe
-```
-
-When that process is in the foreground, VoiceShift mutes the modified output and passes audio through normally.
-
-## Building from Source
-
-```bash
-git clone <your-repo>
-cd voice-changer
-python -m venv .venv && .venv\Scripts\activate
-pip install -r requirements.txt
-python src/main.py
-```
-
-### Build .exe locally
-
-```bash
-pip install pyinstaller==6.9.0
-pyinstaller VoiceShift.spec --noconfirm --clean
-# Output: dist/VoiceShift.exe
-```
-
-### Automated release via GitHub Actions
-
-Push a tag to trigger a full build + GitHub Release:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The workflow (`.github/workflows/build.yml`) runs on Windows, builds the `.exe`, and attaches it to the release automatically.
+1. Open the app in your browser
+2. Allow microphone access when prompted
+3. Press **START** to begin processing
+4. Adjust sliders to taste — changes apply in real time
+5. Save your settings as a preset for later
 
 ## Architecture
 
 ```
-src/
-  main.py          — entry point, Qt app bootstrap
-  audio_engine.py  — WASAPI capture → DSP → virtual output
-  gui.py           — PyQt6 tray UI (320px compact panel)
-  config.py        — JSON config + preset management
-  app_monitor.py   — foreground window poller for per-app rules
+Browser (Web Audio API)
+  getUserMedia() → AudioContext
+    → GainNode (noise gate)
+    → AnalyserNode (input VU)
+    → BiquadFilter (highpass)
+    → BiquadFilter (lowpass)
+    → DynamicsCompressor
+    → DryGain + DelayNode→DelayGain (robotic comb)
+    → OutputGain
+    → AnalyserNode (output VU + spectrum)
+    → MediaStreamDestination (self-monitor)
+
+Server (Express + PostgreSQL)
+  GET    /api/presets       — list all presets
+  POST   /api/presets       — create preset
+  GET    /api/presets/:id   — get preset
+  PATCH  /api/presets/:id   — update preset
+  DELETE /api/presets/:id   — delete preset
 ```
 
-## Memory Footprint
+## Stack
 
-| State | Approx. RAM |
-|-------|------------|
-| Idle (tray) | ~35 MB |
-| Processing audio | ~45 MB |
+- Frontend: React 19 + Vite 7 + TypeScript + Tailwind CSS + shadcn/ui
+- Audio: Web Audio API (BiquadFilterNode, DynamicsCompressorNode, AnalyserNode, GainNode, DelayNode)
+- Backend: Node.js + Express 5
+- Database: PostgreSQL + Drizzle ORM
+- Validation: Zod v4 + Orval codegen from OpenAPI spec
 
-Optimised for Windows WASAPI (lowest-latency audio path).
+## Default Presets
+
+| Preset | Pitch | Formant | Robotic | Gate |
+|--------|-------|---------|---------|------|
+| Default | 0 st | 1.0× | 0% | -50 dB |
+| Deep Voice | -4 st | 0.85× | 0% | -45 dB |
+| High Voice | +5 st | 1.20× | 0% | -50 dB |
+| Robot | +2 st | 1.0× | 70% | -50 dB |
+
+## Memory / CPU
+
+All processing runs in the browser audio thread. CPU usage is minimal (< 1% on a modern machine). No audio is sent to the server — only preset configurations are stored.
+
+## Source Layout
+
+```
+artifacts/voiceshift/src/
+  audio/VoiceProcessor.ts     — Web Audio API engine
+  pages/VoiceShiftApp.tsx     — main app page
+  components/
+    VUMeter.tsx               — real-time level bar
+    SpectrumAnalyzer.tsx      — canvas frequency display
+    ParamSlider.tsx           — labeled slider control
+    PresetPanel.tsx           — preset management UI
+
+artifacts/api-server/src/
+  routes/presets.ts           — CRUD REST API
+
+lib/
+  api-spec/openapi.yaml       — OpenAPI contract
+  db/src/schema/presets.ts    — Drizzle schema
+  api-client-react/           — generated React Query hooks
+  api-zod/                    — generated Zod validators
+```
