@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  administration: write
 
 jobs:
   build:
@@ -36,8 +37,7 @@ jobs:
       - name: Verify output
         run: |
           dir dist\VoiceShift.exe
-          echo "Build size:"
-          (Get-Item dist\VoiceShift.exe).length / 1MB
+          Write-Host "Build size: $([math]::Round((Get-Item dist\VoiceShift.exe).length / 1MB, 2)) MB"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -65,7 +65,21 @@ jobs:
 
       - name: Upload artifact (non-tag builds)
         uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/')"
         with:
           name: VoiceShift-exe
           path: dist/VoiceShift.exe
           retention-days: 14
+
+      - name: Make repo private again
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }} \
+            -d '{"private":true}' | grep -E '"private"|"message"' || true
+          echo "Repo set back to private."
