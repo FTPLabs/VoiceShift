@@ -10,7 +10,9 @@
 # submodule so __getattr__ resolution always succeeds.  The runtime hook
 # neutralises the sys.stdout crash that originally motivated the f2py exclude.
 #
-# RULE: NEVER add numpy.* or scipy.* to `excludes`.
+# RULE 1: NEVER add numpy.* or scipy.* to `excludes`.
+# RULE 2: NEVER exclude stdlib modules (pydoc, inspect, textwrap, etc.) —
+#         scipy._lib._docscrape and other scipy internals import them at runtime.
 
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_all
@@ -47,10 +49,13 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=["rthooks/rthook_fix_stdio.py"],
     excludes=[
-        # Only exclude packages with ZERO connection to the dependency chain.
-        # NEVER list numpy.* or scipy.* here — they use __getattr__ lazy loading
-        # (numpy >= 1.23): any excluded submodule causes ModuleNotFoundError at
-        # runtime when scipy triggers lazy resolution via __getattr__.
+        # SAFE TO EXCLUDE: packages with zero connection to the dependency chain
+        # that are confirmed to never be imported by numpy/scipy/PyQt6/sounddevice.
+        #
+        # NEVER exclude:
+        #   - numpy.* or scipy.*   (lazy-loaded via __getattr__)
+        #   - stdlib modules        (scipy._lib._docscrape imports pydoc, inspect,
+        #                            textwrap, etc. at runtime)
         "tkinter",
         "matplotlib",
         "PIL",
@@ -59,7 +64,6 @@ a = Analysis(
         "IPython",
         "notebook",
         "jupyter",
-        "pydoc",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
