@@ -5,8 +5,10 @@
 #   - Removed deprecated cipher= parameter (removed in PyInstaller 6.x)
 #   - Added runtime hook to fix sys.stdout/stderr being None in windowed mode
 #     (prevents numpy.f2py.cfuncs crash: AttributeError: NoneType.write)
-#   - Excluded numpy.f2py and related modules (not needed, avoid import chain)
-#   - Added missing scipy compat hidden imports
+#   - numpy.f2py is NO LONGER excluded — scipy._lib.array_api_compat.numpy
+#     triggers numpy lazy-loading which resolves numpy.f2py via __getattr__.
+#     Excluding it causes ModuleNotFoundError at runtime. The runtime hook
+#     already neutralises the stdout crash, so f2py can be safely bundled.
 
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
@@ -35,6 +37,7 @@ a = Analysis(
         'numpy.core._multiarray_umath',
         'numpy.lib',
         'numpy.lib.stride_tricks',
+        'numpy.f2py',
         'psutil',
         'PyQt6.QtCore',
         'PyQt6.QtGui',
@@ -49,16 +52,6 @@ a = Analysis(
         'tkinter', 'matplotlib', 'PIL', 'cv2',
         'pandas', 'IPython', 'notebook', 'jupyter',
         'pydoc',
-        # numpy.f2py is a Fortran-wrapping toolkit — not needed at runtime.
-        # Its import chain triggers sys.stdout.write() which is None in
-        # windowed PyInstaller builds, causing the startup crash.
-        'numpy.f2py',
-        'numpy.f2py.auxfuncs',
-        'numpy.f2py.cfuncs',
-        'numpy.f2py.crackfortran',
-        'numpy.f2py.f2py2e',
-        'numpy.f2py.f90mod_rules',
-        'numpy.distutils',
         'numpy.testing',
         'unittest',
         'unittest.case',
