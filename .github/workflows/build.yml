@@ -58,13 +58,85 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller==6.9.0
 
+      - name: Validate spec before build
+        shell: python
+        run: |
+          import sys, pathlib, ast
+
+          spec = pathlib.Path("VoiceShift.spec").read_text(encoding="utf-8")
+          rthook = pathlib.Path("rthooks/rthook_fix_stdio.py").read_text(encoding="utf-8")
+          errors = []
+
+          # 1. collect_all must be used for numpy and scipy
+          if 'collect_all("numpy")' not in spec and "collect_all('numpy')" not in spec:
+              errors.append(
+                  "VoiceShift.spec must call collect_all('numpy'). "
+                  "numpy>=1.23 lazy-loads submodules via __getattr__; any excluded "
+                  "numpy.* submodule causes ModuleNotFoundError at runtime."
+              )
+          if 'collect_all("scipy")' not in spec and "collect_all('scipy')" not in spec:
+              errors.append(
+                  "VoiceShift.spec must call collect_all('scipy'). "
+                  "scipy triggers numpy lazy-loading via array_api_compat."
+              )
+
+          # 2. No numpy.* or scipy.* in excludes block
+          in_excludes = False
+          for lineno, line in enumerate(spec.splitlines(), 1):
+              stripped = line.strip()
+              if "excludes=[" in line or "excludes = [" in line:
+                  in_excludes = True
+              if in_excludes:
+                  if (stripped.startswith('"numpy.') or stripped.startswith("'numpy.") or
+                      stripped.startswith('"scipy.') or stripped.startswith("'scipy.")):
+                      errors.append(
+                          f"Line {lineno}: numpy/scipy submodule in excludes: {stripped!r}. "
+                          "NEVER exclude numpy.* or scipy.* — they use __getattr__ lazy loading."
+                      )
+                  if stripped.startswith("]"):
+                      in_excludes = False
+
+          # 3. rthook must parse cleanly (no IndentationError)
+          try:
+              ast.parse(rthook, filename="rthooks/rthook_fix_stdio.py")
+          except SyntaxError as e:
+              errors.append(f"rthook_fix_stdio.py syntax error: {e}")
+
+          # 4. rthook module-level code must not be indented
+          for i, line in enumerate(rthook.splitlines(), 1):
+              if not line.strip():
+                  continue
+              stripped = line.lstrip()
+              if (stripped.startswith("import ") or stripped.startswith("if sys.")) and i <= 20:
+                  indent = len(line) - len(stripped)
+                  if indent > 0:
+                      errors.append(
+                          f"rthook_fix_stdio.py line {i}: module-level code indented "
+                          f"({indent} spaces). All code must be at column 0."
+                      )
+
+          if errors:
+              print("PRE-BUILD VALIDATION FAILED:")
+              for e in errors:
+                  print(f"  ERROR: {e}")
+              sys.exit(1)
+
+          print(f"OK: pre-build validation passed ({len(spec.splitlines())} spec lines checked)")
+
       - name: Build .exe
         run: pyinstaller VoiceShift.spec --noconfirm --clean
 
       - name: Verify output
+        shell: pwsh
         run: |
-          dir dist\VoiceShift.exe
-          Write-Host "Build size: $([math]::Round((Get-Item dist\VoiceShift.exe).length / 1MB, 2)) MB"
+          $exe = Get-Item dist\VoiceShift.exe
+          $sizeMB = [math]::Round($exe.length / 1MB, 1)
+          Write-Host "Build size: $sizeMB MB"
+          if ($exe.length -lt 10MB) {
+            Write-Error "FAIL: exe is suspiciously small ($sizeMB MB) — build may have failed silently"
+            exit 1
+          }
+          Write-Host "OK: VoiceShift.exe built successfully ($sizeMB MB)"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
