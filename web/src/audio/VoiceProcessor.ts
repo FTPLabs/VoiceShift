@@ -1,4 +1,3 @@
-// src/audio/VoiceProcessor.ts
 export interface VoiceParams {
   pitchSemitones: number;
   formantShift: number;
@@ -29,8 +28,10 @@ export class VoiceProcessor {
   private destinationNode: MediaStreamAudioDestinationNode | null = null;
   private gainIn: GainNode | null = null;
   private gainOut: GainNode | null = null;
+  private pitchShifter: AudioWorkletNode | null = null;
   private highpassFilter: BiquadFilterNode | null = null;
   private lowpassFilter: BiquadFilterNode | null = null;
+  private formantFilter: BiquadFilterNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
   private analyserIn: AnalyserNode | null = null;
   private analyserOut: AnalyserNode | null = null;
@@ -41,6 +42,13 @@ export class VoiceProcessor {
   private monitorAudio: HTMLAudioElement | null = null;
   private _monitoring = false;
   private isRunning = false;
+
+  // Noise gate state
+  private gateLastOpenMs = 0;
+  private gateIsOpen = true;
+  private readonly gateHoldMs = 120;
+  private readonly gateAttackConst = 0.008;
+  private readonly gateReleaseConst = 0.06;
 
   async start(deviceId?: string): Promise<void> {
     if (this.isRunning) return;
@@ -56,51 +64,108 @@ export class VoiceProcessor {
     };
     this.stream = await navigator.mediaDevices.getUserMedia(constraints);
     this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+
+    // --- Load AudioWorklet for pitch shift ---
+    let workletAvailable = false;
+    try {
+      const workletUrl = new URL('/pitch-shift-processor.js', window.location.href).href;
+      await this.ctx.audioWorklet.addModule(workletUrl);
+      workletAvailable = true;
+    } catch (e) {
+      console.warn('[VoiceShift] AudioWorklet unavailable, pitch shift disabled:', e);
+    }
+
+    // --- Create nodes ---
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
     this.destinationNode = this.ctx.createMediaStreamDestination();
+
     this.gainIn = this.ctx.createGain();
     this.gainIn.gain.value = 1.0;
+
+    this.analyserIn = this.ctx.createAnalyser();
+    this.analyserIn.fftSize = 1024;
+    this.analyserIn.smoothingTimeConstant = 0.6;
+
+    // Pitch shifter (AudioWorklet)
+    if (workletAvailable) {
+      this.pitchShifter = new AudioWorkletNode(this.ctx, 'pitch-shift-processor');
+    }
+
+    // Highpass — removes low rumble
     this.highpassFilter = this.ctx.createBiquadFilter();
     this.highpassFilter.type = 'highpass';
     this.highpassFilter.frequency.value = 80;
     this.highpassFilter.Q.value = 0.7;
+
+    // Lowpass — removes hiss
     this.lowpassFilter = this.ctx.createBiquadFilter();
     this.lowpassFilter.type = 'lowpass';
     this.lowpassFilter.frequency.value = 16000;
     this.lowpassFilter.Q.value = 0.7;
+
+    // Formant filter — peaking EQ to emphasise formant region
+    this.formantFilter = this.ctx.createBiquadFilter();
+    this.formantFilter.type = 'peaking';
+    this.formantFilter.frequency.value = 1200;
+    this.formantFilter.Q.value = 0.8;
+    this.formantFilter.gain.value = 0;
+
+    // Dynamics compressor
     this.compressor = this.ctx.createDynamicsCompressor();
     this.compressor.threshold.value = -24;
     this.compressor.knee.value = 10;
     this.compressor.ratio.value = 4;
     this.compressor.attack.value = 0.003;
     this.compressor.release.value = 0.25;
+
+    // Robotic comb filter (delay + dry mix)
     this.delayNode = this.ctx.createDelay(0.1);
     this.delayNode.delayTime.value = 0.01;
     this.delayGain = this.ctx.createGain();
     this.delayGain.gain.value = 0;
     this.dryGain = this.ctx.createGain();
     this.dryGain.gain.value = 1;
+
     this.gainOut = this.ctx.createGain();
     this.gainOut.gain.value = 1.0;
-    this.analyserIn = this.ctx.createAnalyser();
-    this.analyserIn.fftSize = 1024;
-    this.analyserIn.smoothingTimeConstant = 0.8;
+
     this.analyserOut = this.ctx.createAnalyser();
     this.analyserOut.fftSize = 1024;
     this.analyserOut.smoothingTimeConstant = 0.8;
+
+    // --- Wire up the chain ---
+    // Mic → GainIn → AnalyserIn → [PitchShifter?] → HP → LP → Formant → Compressor
+    //   → DryGain ──┐
+    //   → Delay → DelayGain ──┤
+    //                          └→ GainOut → AnalyserOut → Destination
     this.sourceNode.connect(this.gainIn);
     this.gainIn.connect(this.analyserIn);
-    this.analyserIn.connect(this.highpassFilter);
+
+    if (this.pitchShifter) {
+      this.analyserIn.connect(this.pitchShifter);
+      this.pitchShifter.connect(this.highpassFilter);
+    } else {
+      this.analyserIn.connect(this.highpassFilter);
+    }
+
     this.highpassFilter.connect(this.lowpassFilter);
-    this.lowpassFilter.connect(this.compressor);
+    this.lowpassFilter.connect(this.formantFilter);
+    this.formantFilter.connect(this.compressor);
+
     this.compressor.connect(this.dryGain);
     this.compressor.connect(this.delayNode);
     this.delayNode.connect(this.delayGain);
+
     this.dryGain.connect(this.gainOut);
     this.delayGain.connect(this.gainOut);
+
     this.gainOut.connect(this.analyserOut);
     this.analyserOut.connect(this.destinationNode);
+
     this.isRunning = true;
+    this.gateLastOpenMs = performance.now();
+    this.gateIsOpen = true;
+
     if (this._monitoring) this._startMonitor();
   }
 
@@ -110,8 +175,10 @@ export class VoiceProcessor {
     this.sourceNode?.disconnect();
     this.gainIn?.disconnect();
     this.analyserIn?.disconnect();
+    this.pitchShifter?.disconnect();
     this.highpassFilter?.disconnect();
     this.lowpassFilter?.disconnect();
+    this.formantFilter?.disconnect();
     this.compressor?.disconnect();
     this.dryGain?.disconnect();
     this.delayNode?.disconnect();
@@ -122,30 +189,61 @@ export class VoiceProcessor {
     this.ctx?.close();
     this.ctx = null;
     this.stream = null;
+    this.pitchShifter = null;
     this.isRunning = false;
   }
 
   setParams(params: VoiceParams): void {
     if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    // Pitch shift via AudioWorklet
+    if (this.pitchShifter) {
+      const factor = Math.pow(2, params.pitchSemitones / 12);
+      const pf = this.pitchShifter.parameters.get('pitchFactor');
+      if (pf) pf.setTargetAtTime(factor, t, 0.05);
+    }
+
+    // Highpass filter
     if (this.highpassFilter)
-      this.highpassFilter.frequency.setTargetAtTime(params.highpassFreq, this.ctx.currentTime, 0.01);
+      this.highpassFilter.frequency.setTargetAtTime(params.highpassFreq, t, 0.02);
+
+    // Lowpass filter (affected by formant shift)
     if (this.lowpassFilter) {
-      const formantFreq = Math.min(params.lowpassFreq * params.formantShift, 20000);
-      this.lowpassFilter.frequency.setTargetAtTime(formantFreq, this.ctx.currentTime, 0.02);
+      const lpFreq = Math.min(params.lowpassFreq * params.formantShift, 20000);
+      this.lowpassFilter.frequency.setTargetAtTime(lpFreq, t, 0.02);
     }
+
+    // Formant filter: shift peak frequency and boost/cut
+    if (this.formantFilter) {
+      // Base formant ~1200 Hz, scaled by formantShift
+      const formantFreq = Math.min(Math.max(500 * params.formantShift, 200), 6000);
+      const formantGain = (params.formantShift - 1.0) * 12; // ±12 dB at extremes
+      this.formantFilter.frequency.setTargetAtTime(formantFreq, t, 0.05);
+      this.formantFilter.gain.setTargetAtTime(formantGain, t, 0.05);
+    }
+
+    // Compressor
     if (this.compressor) {
-      this.compressor.threshold.setTargetAtTime(params.compressorThreshold, this.ctx.currentTime, 0.01);
-      this.compressor.ratio.setTargetAtTime(params.compressorRatio, this.ctx.currentTime, 0.01);
+      this.compressor.threshold.setTargetAtTime(params.compressorThreshold, t, 0.01);
+      this.compressor.ratio.setTargetAtTime(params.compressorRatio, t, 0.01);
     }
+
+    // Robotic comb filter
     if (this.delayGain && this.dryGain) {
-      this.delayGain.gain.setTargetAtTime(params.roboticAmount * 0.8, this.ctx.currentTime, 0.01);
-      this.dryGain.gain.setTargetAtTime(1 - params.roboticAmount * 0.4, this.ctx.currentTime, 0.01);
+      this.delayGain.gain.setTargetAtTime(params.roboticAmount * 0.9, t, 0.01);
+      this.dryGain.gain.setTargetAtTime(1 - params.roboticAmount * 0.5, t, 0.01);
     }
-    if (this.gainOut) {
-      this.gainOut.gain.setTargetAtTime(params.volumeOut, this.ctx.currentTime, 0.01);
-    }
+
+    // Output gain
+    if (this.gainOut)
+      this.gainOut.gain.setTargetAtTime(params.volumeOut, t, 0.01);
   }
 
+  /**
+   * Noise gate with hold time to prevent dropouts between syllables.
+   * Call every animation frame.
+   */
   applyNoiseGate(thresholdDb: number): void {
     if (!this.analyserIn || !this.gainIn || !this.ctx) return;
     const buf = new Uint8Array(this.analyserIn.frequencyBinCount);
@@ -157,8 +255,23 @@ export class VoiceProcessor {
     }
     const rms = Math.sqrt(sum / buf.length);
     const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -100;
-    const target = rmsDb < thresholdDb ? 0 : 1;
-    this.gainIn.gain.setTargetAtTime(target, this.ctx.currentTime, 0.005);
+    const now = performance.now();
+
+    if (rmsDb >= thresholdDb) {
+      // Above threshold — open gate
+      this.gateLastOpenMs = now;
+      if (!this.gateIsOpen) {
+        this.gateIsOpen = true;
+        this.gainIn.gain.setTargetAtTime(1, this.ctx.currentTime, this.gateAttackConst);
+      }
+    } else if (now - this.gateLastOpenMs > this.gateHoldMs) {
+      // Below threshold AND held long enough — close gate
+      if (this.gateIsOpen) {
+        this.gateIsOpen = false;
+        this.gainIn.gain.setTargetAtTime(0, this.ctx.currentTime, this.gateReleaseConst);
+      }
+    }
+    // During hold period: gate stays open even if below threshold
   }
 
   getInputLevel(): number {
