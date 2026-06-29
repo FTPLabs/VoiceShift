@@ -75,12 +75,47 @@ def _spec_no_block_cipher():
 test("VoiceShift.spec -- no deprecated block_cipher", _spec_no_block_cipher)
 
 
-def _spec_excludes_f2py():
+def _spec_uses_collect_all():
+    """numpy/scipy use __getattr__ lazy loading (numpy>=1.23). collect_all() is
+    the only safe bundling strategy — manual hiddenimports miss lazy-resolved
+    submodules and cause ModuleNotFoundError at runtime."""
     src = Path("VoiceShift.spec").read_text(encoding="utf-8")
-    assert "numpy.f2py" in src, "VoiceShift.spec must exclude numpy.f2py"
+    assert 'collect_all' in src, (
+        "VoiceShift.spec must use collect_all() for numpy and scipy. "
+        "Manual hiddenimports break when numpy.__getattr__ lazy-loads submodules."
+    )
+    assert 'collect_all("numpy")' in src or 'collect_all('"'numpy'"')' in src, \
+        "Missing: collect_all for numpy"
+    assert 'collect_all("scipy")' in src or 'collect_all('"'scipy'"')' in src, \
+        "Missing: collect_all for scipy"
 
 
-test("VoiceShift.spec -- numpy.f2py in excludes", _spec_excludes_f2py)
+test("VoiceShift.spec -- uses collect_all() for numpy and scipy", _spec_uses_collect_all)
+
+
+def _spec_no_numpy_excludes():
+    """NEVER exclude numpy.* or scipy.* submodules.
+    numpy>=1.23 resolves them via __getattr__ — excluding any causes
+    ModuleNotFoundError at runtime (numpy.f2py, numpy.testing, numpy.distutils…)."""
+    src = Path("VoiceShift.spec").read_text(encoding="utf-8")
+    in_excludes = False
+    for lineno, line in enumerate(src.splitlines(), 1):
+        stripped = line.strip()
+        if "excludes=[" in line or 'excludes = [' in line:
+            in_excludes = True
+        if in_excludes:
+            if ('numpy.' in stripped or 'scipy.' in stripped) and stripped.startswith('"'):
+                raise AssertionError(
+                    f"Line {lineno}: numpy/scipy submodule in excludes={stripped!r}. "
+                    "numpy>=1.23 lazy-loads these via __getattr__; excluding them causes "
+                    "ModuleNotFoundError at runtime. Use collect_all() instead."
+                )
+            # End of excludes block
+            if stripped.startswith("]") or (in_excludes and "win_no_prefer" in line):
+                in_excludes = False
+
+
+test("VoiceShift.spec -- no numpy.*/scipy.* in excludes (lazy-load safety)", _spec_no_numpy_excludes)
 
 
 def _rthook_exists():
@@ -93,6 +128,33 @@ def _rthook_exists():
 
 
 test("rthooks/rthook_fix_stdio.py -- exists and redirects stdio", _rthook_exists)
+
+
+def _rthook_no_indentation():
+    """Runtime hooks must have module-level code at column 0.
+    Unexpected indentation causes IndentationError in PyInstaller Analysis phase."""
+    path = Path("rthooks/rthook_fix_stdio.py")
+    src = path.read_text(encoding="utf-8")
+    # Must parse cleanly
+    ast.parse(src, filename=str(path))
+    # Module-level import/if statements must not be indented
+    for i, line in enumerate(src.splitlines(), 1):
+        if line and not line[0].isspace():
+            continue  # unindented line — fine
+        stripped = line.lstrip()
+        if stripped.startswith("import ") or stripped.startswith("if sys."):
+            # Check if this is inside a function/class (acceptable) or at module level (bad)
+            # A simple heuristic: if any preceding non-blank, non-comment line has 0 indent
+            # and is not a def/class, this is unexpectedly indented at module level
+            indent = len(line) - len(stripped)
+            if indent > 0 and i <= 20:  # first 20 lines — module-level region
+                raise AssertionError(
+                    f"Line {i}: module-level statement is indented ({indent} spaces): {line!r}. "
+                    "Runtime hooks must have all code at column 0."
+                )
+
+
+test("rthooks/rthook_fix_stdio.py -- no unexpected indentation", _rthook_no_indentation)
 
 
 def _spec_references_rthook():
