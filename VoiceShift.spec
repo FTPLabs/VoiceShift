@@ -1,63 +1,63 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec — produces a single portable VoiceShift.exe
+# VoiceShift.spec — single-file portable exe
 #
-# Fixed issues:
-#   - Removed deprecated cipher= parameter (removed in PyInstaller 6.x)
-#   - Added runtime hook to fix sys.stdout/stderr being None in windowed mode
-#     (prevents numpy.f2py.cfuncs crash: AttributeError: NoneType.write)
-#   - numpy.f2py is NO LONGER excluded — scipy._lib.array_api_compat.numpy
-#     triggers numpy lazy-loading which resolves numpy.f2py via __getattr__.
-#     Excluding it causes ModuleNotFoundError at runtime. The runtime hook
-#     already neutralises the stdout crash, so f2py can be safely bundled.
+# IMPORTANT: numpy and scipy use __getattr__-based lazy loading (numpy >= 1.23).
+# Any submodule listed in `excludes` that gets resolved via __getattr__ at
+# runtime will produce:  ModuleNotFoundError: No module named 'numpy.<X>'
+# even if it is never explicitly imported by application code.
+#
+# FIX: use collect_all() for both numpy and scipy.  This bundles every
+# submodule so __getattr__ resolution always succeeds.  The runtime hook
+# neutralises the sys.stdout crash that originally motivated the f2py exclude.
+#
+# Rule: NEVER add numpy.* or scipy.* to `excludes`.
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_all
+
+# Exhaustively collect numpy + scipy so lazy-loading via __getattr__ works.
+numpy_datas,   numpy_bins,   numpy_hidden   = collect_all("numpy")
+scipy_datas,   scipy_bins,   scipy_hidden   = collect_all("scipy")
 
 a = Analysis(
-    ['src/main.py'],
-    pathex=['src'],
-    binaries=collect_dynamic_libs('sounddevice'),
+    ["src/main.py"],
+    pathex=["src"],
+    binaries=(
+        collect_dynamic_libs("sounddevice")
+        + numpy_bins
+        + scipy_bins
+    ),
     datas=[
-        *collect_data_files('sounddevice'),
+        *collect_data_files("sounddevice"),
+        *numpy_datas,
+        *scipy_datas,
     ],
     hiddenimports=[
-        'sounddevice',
-        'scipy.signal',
-        'scipy.signal.windows',
-        'scipy.signal.windows._windows',
-        'scipy.fft',
-        'scipy.linalg',
-        'scipy.linalg._basic',
-        'scipy._lib._util',
-        'scipy._lib._array_api',
-        'scipy._lib.array_api_compat',
-        'scipy._lib.array_api_compat.numpy',
-        'numpy',
-        'numpy.core',
-        'numpy.core._multiarray_umath',
-        'numpy.lib',
-        'numpy.lib.stride_tricks',
-        'numpy.f2py',
-        'psutil',
-        'PyQt6.QtCore',
-        'PyQt6.QtGui',
-        'PyQt6.QtWidgets',
-        'winreg',
-        'ctypes.wintypes',
+        "sounddevice",
+        "psutil",
+        "PyQt6.QtCore",
+        "PyQt6.QtGui",
+        "PyQt6.QtWidgets",
+        "winreg",
+        "ctypes.wintypes",
+        *numpy_hidden,
+        *scipy_hidden,
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['rthooks/rthook_fix_stdio.py'],
+    runtime_hooks=["rthooks/rthook_fix_stdio.py"],
     excludes=[
-        'tkinter', 'matplotlib', 'PIL', 'cv2',
-        'pandas', 'IPython', 'notebook', 'jupyter',
-        'pydoc',
-        'numpy.testing',
-        'unittest',
-        'unittest.case',
-        'unittest.suite',
-        'unittest.loader',
-        'unittest.runner',
+        # Only exclude packages with ZERO connection to the dependency chain.
+        # NEVER list numpy.* or scipy.* here — see header comment.
+        "tkinter",
+        "matplotlib",
+        "PIL",
+        "cv2",
+        "pandas",
+        "IPython",
+        "notebook",
+        "jupyter",
+        "pydoc",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -73,7 +73,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='VoiceShift',
+    name="VoiceShift",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -86,7 +86,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon="assets/icon.ico",
     version_file=None,
     uac_admin=False,
 )
