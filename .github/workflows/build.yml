@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: write
-  administration: write
 
 jobs:
   build:
@@ -70,16 +69,3 @@ jobs:
           name: VoiceShift-exe
           path: dist/VoiceShift.exe
           retention-days: 14
-
-      - name: Make repo private again
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -s -X PATCH \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }} \
-            -d '{"private":true}' | grep -E '"private"|"message"' || true
-          echo "Repo set back to private."
