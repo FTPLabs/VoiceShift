@@ -176,6 +176,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_tray()
+        self._update_power_btn()  # must come after _build_tray() which creates _tray_toggle_action
         self._apply_current_preset()
         self._refresh_devices()
 
@@ -346,7 +347,6 @@ class MainWindow(QMainWindow):
             sl.valueChanged.connect(self._on_slider_changed)
 
         self._refresh_preset_combo()
-        self._update_power_btn()
 
     def _make_slider_row(self, label: str, mn: int, mx: int, val: int, step: int, unit: str):
         row = QHBoxLayout()
