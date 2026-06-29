@@ -4,9 +4,9 @@ Usage:
     python main.py [--minimised]
 """
 
-import sys
-import logging
 import argparse
+import logging
+import sys
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -19,8 +19,6 @@ def main():
     args = parser.parse_args()
 
     from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import Qt
-
     import config as cfg
     from audio_engine import AudioEngine
     from gui import MainWindow, STYLE

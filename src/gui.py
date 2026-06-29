@@ -3,24 +3,22 @@ Ultra-minimal PyQt6 system-tray UI for VoiceShift.
 Main window is a compact floating panel (~320x480 px).
 """
 
-import sys
 import threading
 from dataclasses import asdict
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QIcon, QColor, QPainter, QPixmap, QFont, QAction
+from PyQt6.QtGui import QIcon, QColor, QPainter, QPixmap, QAction
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QComboBox, QPushButton, QSystemTrayIcon,
     QMenu, QCheckBox, QFrame, QScrollArea, QLineEdit,
-    QInputDialog, QMessageBox, QSizePolicy,
+    QInputDialog, QMessageBox,
 )
 
-import config as cfg
-import audio_engine as ae
-from audio_engine import AudioEngine, VoiceParams
 from app_monitor import AppMonitor
+from audio_engine import AudioEngine, VoiceParams
+import config as cfg
 
 APP_VERSION = "1.0.0"
 ACCENT = "#6C63FF"
@@ -154,7 +152,7 @@ def _label(text: str, dim: bool = False, bold: bool = False) -> QLabel:
     if dim:
         lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
     if bold:
-        lbl.setStyleSheet(f"font-weight: 600; font-size: 13px;")
+        lbl.setStyleSheet("font-weight: 600; font-size: 13px;")
     return lbl
 
 
@@ -364,7 +362,7 @@ class MainWindow(QMainWindow):
         val_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         sl.setProperty("val_lbl", val_lbl)
         sl.setProperty("unit", unit)
-        sl.valueChanged.connect(lambda v, l=val_lbl, u=unit: l.setText(f"{v}{u}"))
+        sl.valueChanged.connect(lambda v, lbl=val_lbl, u=unit: lbl.setText(f"{v}{u}"))
         row.addWidget(lbl)
         row.addWidget(sl, 1)
         row.addWidget(val_lbl)
