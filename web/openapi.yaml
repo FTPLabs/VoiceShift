@@ -1,0 +1,246 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: VoiceShift API - Real-time voice processing preset management
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: presets
+    description: Voice processing preset management
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /presets:
+    get:
+      operationId: listPresets
+      tags: [presets]
+      summary: List all presets
+      description: Returns all saved voice processing presets
+      responses:
+        "200":
+          description: List of presets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Preset"
+    post:
+      operationId: createPreset
+      tags: [presets]
+      summary: Create a preset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PresetInput"
+      responses:
+        "201":
+          description: Created preset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preset"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /presets/{id}:
+    get:
+      operationId: getPreset
+      tags: [presets]
+      summary: Get a preset by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The preset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preset"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: updatePreset
+      tags: [presets]
+      summary: Update a preset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PresetUpdate"
+      responses:
+        "200":
+          description: Updated preset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preset"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deletePreset
+      tags: [presets]
+      summary: Delete a preset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    VoiceParams:
+      type: object
+      description: Voice processing parameters
+      properties:
+        pitchSemitones:
+          type: number
+          description: Pitch shift in semitones (-12 to +12)
+        formantShift:
+          type: number
+          description: Formant shift factor (0.5 to 2.0)
+        roboticAmount:
+          type: number
+          description: Robotic/vocoder effect (0.0 to 1.0)
+        noiseGateDb:
+          type: number
+          description: Noise gate threshold in dB (-80 to -10)
+        volumeOut:
+          type: number
+          description: Output gain (0.0 to 2.0)
+        highpassFreq:
+          type: number
+          description: High-pass filter frequency in Hz (20 to 500)
+        lowpassFreq:
+          type: number
+          description: Low-pass filter frequency in Hz (2000 to 20000)
+        compressorThreshold:
+          type: number
+          description: Compressor threshold in dB (-60 to 0)
+        compressorRatio:
+          type: number
+          description: Compressor ratio (1 to 20)
+      required:
+        - pitchSemitones
+        - formantShift
+        - roboticAmount
+        - noiseGateDb
+        - volumeOut
+        - highpassFreq
+        - lowpassFreq
+        - compressorThreshold
+        - compressorRatio
+
+    Preset:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        params:
+          $ref: "#/components/schemas/VoiceParams"
+        isDefault:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - name
+        - params
+        - isDefault
+        - createdAt
+        - updatedAt
+
+    PresetInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+        params:
+          $ref: "#/components/schemas/VoiceParams"
+      required:
+        - name
+        - params
+
+    PresetUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+        params:
+          $ref: "#/components/schemas/VoiceParams"
