@@ -107,7 +107,7 @@ def _requirements_pinned():
     lns = [
         ln.strip()
         for ln in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
+        if ln.strip() and not ln.strip().startswith("#")
     ]
     for line in lns:
         assert "==" in line, f"Dependency not pinned: {line!r}"

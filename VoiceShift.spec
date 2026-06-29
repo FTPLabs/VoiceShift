@@ -2,7 +2,7 @@
   # PyInstaller spec — produces a single portable VoiceShift.exe
   #
   # Fixed issues:
-  #   - Removed deprecated block_cipher / cipher= (removed in PyInstaller 6.x)
+  #   - Removed deprecated cipher= parameter (removed in PyInstaller 6.x)
   #   - Added runtime hook to fix sys.stdout/stderr being None in windowed mode
   #     (prevents numpy.f2py.cfuncs crash: AttributeError: NoneType.write)
   #   - Excluded numpy.f2py and related modules (not needed, avoid import chain)
