@@ -23,42 +23,6 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
-      - name: Install workspace dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build typecheck libs
-        run: pnpm run typecheck:libs
-
-      - name: Build Vite frontend (for Electron)
-        run: pnpm --filter @workspace/voiceshift run build
-        env:
-          PORT: "3000"
-          BASE_PATH: "/"
-          NODE_ENV: "production"
-
-      - name: Copy renderer to desktop/renderer
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path desktop\renderer
-          Copy-Item -Recurse -Force artifacts\voiceshift\dist\public\* desktop\renderer\
-
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm install
