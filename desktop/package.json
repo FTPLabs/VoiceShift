@@ -5,10 +5,14 @@
   "main": "main.cjs",
   "author": "FTPLabs",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FTPLabs/VoiceShift.git"
+  },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win --x64",
-    "dist:linux": "electron-builder --linux"
+    "dist": "electron-builder --win --x64 --publish=never",
+    "dist:linux": "electron-builder --linux --publish=never"
   },
   "build": {
     "appId": "com.ftplabs.voiceshift",
