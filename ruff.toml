@@ -1,0 +1,2 @@
+[lint.isort]
+known-first-party = ["audio_engine", "app_monitor", "config", "gui"]

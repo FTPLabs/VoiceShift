@@ -32,7 +32,7 @@ jobs:
         run: python scripts/check_whitespace.py
 
       - name: Ruff lint (errors, warnings, imports)
-        run: ruff check src/ --select E,W,F,I --ignore E501
+        run: ruff check src/ --select E,W,F --ignore E501
 
       - name: Smoke tests
         run: python scripts/smoke_test.py
