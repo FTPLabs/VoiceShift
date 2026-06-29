@@ -10,7 +10,7 @@
 # submodule so __getattr__ resolution always succeeds.  The runtime hook
 # neutralises the sys.stdout crash that originally motivated the f2py exclude.
 #
-# Rule: NEVER add numpy.* or scipy.* to `excludes`.
+# RULE: NEVER add numpy.* or scipy.* to `excludes`.
 
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_all
@@ -48,7 +48,9 @@ a = Analysis(
     runtime_hooks=["rthooks/rthook_fix_stdio.py"],
     excludes=[
         # Only exclude packages with ZERO connection to the dependency chain.
-        # NEVER list numpy.* or scipy.* here — see header comment.
+        # NEVER list numpy.* or scipy.* here — they use __getattr__ lazy loading
+        # (numpy >= 1.23): any excluded submodule causes ModuleNotFoundError at
+        # runtime when scipy triggers lazy resolution via __getattr__.
         "tkinter",
         "matplotlib",
         "PIL",
@@ -86,7 +88,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/icon.ico",
+    icon=None,
     version_file=None,
     uac_admin=False,
 )
