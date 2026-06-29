@@ -1,5 +1,13 @@
-PyQt6==6.7.1
-sounddevice==0.5.1
-scipy==1.14.0
-numpy==2.0.1
-psutil==6.0.0
+# VoiceShift — pinned runtime dependencies
+  # All versions must be kept pinned (==) so PyInstaller builds are reproducible.
+  #
+  # numpy 2.x note: ensure VoiceShift.spec has:
+  #   - rthooks/rthook_fix_stdio.py in runtime_hooks
+  #   - numpy.f2py in excludes
+  # Without those, f2py crashes at import time in console=False windowed builds.
+  PyQt6==6.7.1
+  sounddevice==0.5.1
+  scipy==1.14.0
+  numpy==2.0.1
+  psutil==6.0.0
+  
