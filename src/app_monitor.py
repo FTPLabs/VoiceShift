@@ -4,9 +4,9 @@ Polls the active window every 500 ms and returns its process name.
 Used to auto-switch presets based on which app is in focus.
 """
 
+import logging
 import threading
 import time
-import logging
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)

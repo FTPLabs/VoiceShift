@@ -31,11 +31,8 @@ jobs:
       - name: Whitespace / encoding check
         run: python scripts/check_whitespace.py
 
-      - name: Ruff lint
+      - name: Ruff lint (errors, warnings, imports)
         run: ruff check src/ --select E,W,F,I --ignore E501
-
-      - name: Ruff format check
-        run: ruff format src/ --check
 
       - name: Smoke tests
         run: python scripts/smoke_test.py

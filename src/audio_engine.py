@@ -3,14 +3,15 @@ Real-time voice processing engine using WASAPI via sounddevice.
 Uses phase vocoder for pitch shifting and formant preservation.
 """
 
-import numpy as np
-import sounddevice as sd
-import scipy.signal as signal
-import threading
-import queue
 import logging
+import queue
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
+
+import numpy as np
+import scipy.signal as signal
+import sounddevice as sd
 
 logger = logging.getLogger(__name__)
 
