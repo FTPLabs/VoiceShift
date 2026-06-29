@@ -1,0 +1,71 @@
+name: Build VoiceShift.exe
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.9.0
+
+      - name: Build .exe
+        run: |
+          pyinstaller VoiceShift.spec --noconfirm --clean
+
+      - name: Verify output
+        run: |
+          dir dist\VoiceShift.exe
+          echo "Build size:"
+          (Get-Item dist\VoiceShift.exe).length / 1MB
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: "VoiceShift ${{ github.ref_name }}"
+          body: |
+            ## VoiceShift ${{ github.ref_name }}
+
+            Portable single-file `.exe` — no installer needed.
+
+            ### Requirements
+            - Windows 10/11 x64
+            - [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free) — set as Output device in VoiceShift so other apps (Discord, games, browsers) pick up your processed voice
+
+            ### Usage
+            1. Download `VoiceShift.exe`
+            2. Run it — appears in system tray
+            3. Select your real mic as **Input**, VB-Cable as **Output**
+            4. Adjust pitch / formant / robotic sliders
+            5. Enable **Autostart** for persistent use
+          files: dist/VoiceShift.exe
+          draft: false
+          prerelease: false
+
+      - name: Upload artifact (non-tag builds)
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceShift-exe
+          path: dist/VoiceShift.exe
+          retention-days: 14
