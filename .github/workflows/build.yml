@@ -67,20 +67,26 @@ jobs:
           rthook = pathlib.Path("rthooks/rthook_fix_stdio.py").read_text(encoding="utf-8")
           errors = []
 
+          # Stdlib modules that scipy imports at runtime via _docscrape / _axis_nan_policy
+          DANGEROUS_STDLIB = {
+              "pydoc", "inspect", "textwrap", "difflib", "doctest",
+              "pprint", "reprlib", "dis", "opcode", "tokenize", "token", "ast",
+          }
+
           # 1. collect_all must be used for numpy and scipy
           if 'collect_all("numpy")' not in spec and "collect_all('numpy')" not in spec:
               errors.append(
-                  "VoiceShift.spec must call collect_all('numpy'). "
+                  "spec must call collect_all('numpy'). "
                   "numpy>=1.23 lazy-loads submodules via __getattr__; any excluded "
                   "numpy.* submodule causes ModuleNotFoundError at runtime."
               )
           if 'collect_all("scipy")' not in spec and "collect_all('scipy')" not in spec:
               errors.append(
-                  "VoiceShift.spec must call collect_all('scipy'). "
+                  "spec must call collect_all('scipy'). "
                   "scipy triggers numpy lazy-loading via array_api_compat."
               )
 
-          # 2. No numpy.* or scipy.* in excludes block
+          # 2. No numpy.*/scipy.* or dangerous stdlib modules in excludes block
           in_excludes = False
           for lineno, line in enumerate(spec.splitlines(), 1):
               stripped = line.strip()
@@ -93,6 +99,13 @@ jobs:
                           f"Line {lineno}: numpy/scipy submodule in excludes: {stripped!r}. "
                           "NEVER exclude numpy.* or scipy.* — they use __getattr__ lazy loading."
                       )
+                  for mod in DANGEROUS_STDLIB:
+                      if stripped in (f'"{mod}"', f"'{mod}'", f'"{mod}",', f"'{mod}',"):
+                          errors.append(
+                              f"Line {lineno}: stdlib module '{mod}' in excludes. "
+                              f"scipy._lib._docscrape imports it at runtime. "
+                              f"Never exclude: {', '.join(sorted(DANGEROUS_STDLIB))}"
+                          )
                   if stripped.startswith("]"):
                       in_excludes = False
 
@@ -126,7 +139,7 @@ jobs:
       - name: Build .exe
         run: pyinstaller VoiceShift.spec --noconfirm --clean
 
-      - name: Verify output
+      - name: Verify output size
         shell: pwsh
         run: |
           $exe = Get-Item dist\VoiceShift.exe
@@ -137,6 +150,39 @@ jobs:
             exit 1
           }
           Write-Host "OK: VoiceShift.exe built successfully ($sizeMB MB)"
+
+      - name: Runtime smoke test
+        shell: pwsh
+        run: |
+          # Start the exe and wait up to 8 seconds.
+          # If it exits before the timeout:        -> it crashed at startup (FAIL)
+          # If it is still running after 8 seconds -> it started successfully (PASS), kill it
+          #
+          # Why 8 seconds: GUI app with PyQt6 + audio init takes ~2-4 s on a fresh runner.
+          # A startup crash (import error, missing module) always exits within 1-2 s.
+          Write-Host "Starting VoiceShift.exe for runtime smoke test..."
+          $proc = Start-Process -FilePath "dist\VoiceShift.exe" -PassThru -WindowStyle Hidden
+
+          $timeout = 8   # seconds to wait
+          $interval = 0.5
+          $elapsed  = 0
+
+          while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds $interval
+            $elapsed += $interval
+            $proc.Refresh()
+            if ($proc.HasExited) {
+              $code = $proc.ExitCode
+              Write-Error ("RUNTIME SMOKE TEST FAILED: exe exited after {0:N1}s with code {1}." -f $elapsed, $code)
+              Write-Error "This usually means a missing module (ModuleNotFoundError) or early crash."
+              Write-Error "Check the previous build log for traceback details."
+              exit 1
+            }
+          }
+
+          Write-Host ("OK: exe still running after {0}s — startup succeeded. Stopping." -f $timeout)
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "RUNTIME SMOKE TEST PASSED"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
