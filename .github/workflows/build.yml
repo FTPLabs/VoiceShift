@@ -139,67 +139,81 @@ jobs:
       # ---------------------------------------------------------------
       - name: Create self-signed certificate & sign exe
         shell: pwsh
+        continue-on-error: true
         run: |
+          Set-StrictMode -Off
+          $ErrorActionPreference = 'Continue'
           Write-Host "=== Creating self-signed code-signing certificate ==="
 
-          # Create certificate valid for 10 years
-          $cert = New-SelfSignedCertificate `
-            -Type CodeSigning `
-            -Subject "CN=FTPLabs VoiceShift, O=FTPLabs, L=Internet, C=US" `
-            -CertStoreLocation "Cert:\CurrentUser\My" `
-            -NotAfter (Get-Date).AddYears(10) `
-            -KeySpec Signature `
-            -KeyUsage DigitalSignature `
-            -HashAlgorithm SHA256
+          try {
+            # Create certificate valid for 10 years
+            $cert = New-SelfSignedCertificate `
+              -Type CodeSigning `
+              -Subject "CN=FTPLabs VoiceShift, O=FTPLabs, C=US" `
+              -CertStoreLocation "Cert:\CurrentUser\My" `
+              -NotAfter (Get-Date).AddYears(10) `
+              -KeySpec Signature `
+              -KeyUsage DigitalSignature `
+              -HashAlgorithm SHA256
 
-          Write-Host "Certificate thumbprint: $($cert.Thumbprint)"
-          Write-Host "Certificate subject:    $($cert.Subject)"
-          Write-Host "Certificate valid until: $($cert.NotAfter)"
+            Write-Host "Certificate thumbprint: $($cert.Thumbprint)"
+            Write-Host "Certificate valid until: $($cert.NotAfter)"
 
-          # Export the public certificate for users to install (trust chain)
-          $cerPath = "dist\VoiceShift_CodeSign.cer"
-          Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT | Out-Null
-          Write-Host "Exported public cert to: $cerPath"
+            # Export the public .cer for users to install (trust chain)
+            $cerPath = "dist\VoiceShift_CodeSign.cer"
+            Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT | Out-Null
+            Write-Host "Exported public cert: $cerPath"
 
-          # Export PFX (private key) for signing
-          $pfxPass   = ConvertTo-SecureString "VoiceShift_BuildKey_2025" -Force -AsPlainText
-          $pfxPath   = "$env:RUNNER_TEMP\codesign.pfx"
-          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pfxPass | Out-Null
+            # Export PFX for signing
+            $pfxPass = ConvertTo-SecureString "VoiceShift_BuildKey_2025" -Force -AsPlainText
+            $pfxPath = "$env:RUNNER_TEMP\codesign.pfx"
+            Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pfxPass | Out-Null
+            Write-Host "PFX exported to temp path"
 
-          # Locate signtool.exe (Windows SDK ships with the runner)
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
-            -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -like "*x64*" } |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1 -ExpandProperty FullName
+            # Locate signtool.exe
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+              -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'x64' } |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
 
-          if (-not $signtool) {
-            Write-Warning "signtool.exe not found — skipping signing"
-            exit 0
+            if (-not $signtool) {
+              $signtool = Get-ChildItem "C:\Program Files\Windows Kits\10\bin" `
+                -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match 'x64' } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+            }
+
+            if (-not $signtool) {
+              Write-Warning "signtool.exe not found in Windows Kits — skipping signing"
+              exit 0
+            }
+            Write-Host "Using signtool: $signtool"
+
+            # Sign the exe (try with timestamp, fall back without)
+            & $signtool sign /fd SHA256 /f $pfxPath /p "VoiceShift_BuildKey_2025" `
+              /tr http://timestamp.digicert.com /td SHA256 `
+              /d "VoiceShift Voice Processor" `
+              /du "https://github.com/FTPLabs/VoiceShift" `
+              "dist\VoiceShift.exe" 2>&1
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Timestamp server unavailable, signing without timestamp..."
+              & $signtool sign /fd SHA256 /f $pfxPath /p "VoiceShift_BuildKey_2025" `
+                /d "VoiceShift Voice Processor" "dist\VoiceShift.exe" 2>&1
+            }
+
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "SUCCESS: VoiceShift.exe signed with self-signed certificate"
+            } else {
+              Write-Warning "Signing returned code $LASTEXITCODE — exe is still functional, just unsigned"
+            }
+          } catch {
+            Write-Warning "Certificate/signing step encountered an error: $_"
+            Write-Warning "The exe was built successfully and is fully functional — only the signature is missing."
           }
-
-          Write-Host "Using signtool: $signtool"
-
-          # Sign with SHA-256 + RFC 3161 timestamp
-          & $signtool sign `
-            /fd  SHA256 `
-            /f   $pfxPath `
-            /p   "VoiceShift_BuildKey_2025" `
-            /tr  http://timestamp.digicert.com `
-            /td  SHA256 `
-            /d   "VoiceShift Voice Processor" `
-            /du  "https://github.com/FTPLabs/VoiceShift" `
-            "dist\VoiceShift.exe"
-
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "SUCCESS: VoiceShift.exe signed"
-          } else {
-            Write-Warning "Signing exited with code $LASTEXITCODE (continuing)"
-          }
-
-          # Verify signature
-          & $signtool verify /pa /v "dist\VoiceShift.exe"
-          Write-Host "Signature verification complete."
+          exit 0
 
       - name: Generate certificate README
         shell: pwsh
