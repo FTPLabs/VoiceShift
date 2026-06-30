@@ -3,6 +3,7 @@ PyQt6 system-tray UI for VoiceShift.
 Compact floating panel with full parameter control.
 """
 
+import logging
 import threading
 from dataclasses import asdict
 from typing import Optional
@@ -19,6 +20,8 @@ from PyQt6.QtWidgets import (
 from app_monitor import AppMonitor
 from audio_engine import AudioEngine, VoiceParams
 import config as cfg
+
+logger = logging.getLogger(__name__)
 
 APP_VERSION = "2.0.0"
 ACCENT = "#6C63FF"
@@ -552,8 +555,7 @@ class MainWindow(QMainWindow):
             try:
                 self._engine.preview_once(2.0)
             except Exception as e:
-                logger_err = f"Preview error: {e}"
-                logger_err  # noqa: F841 — logged below
+                logger.warning("Preview error: %s", e)
             finally:
                 self._preview_running = False
                 if was_active:

@@ -84,9 +84,9 @@ def _spec_uses_collect_all():
         "VoiceShift.spec must use collect_all() for numpy and scipy. "
         "Manual hiddenimports break when numpy.__getattr__ lazy-loads submodules."
     )
-    assert 'collect_all("numpy")' in src or 'collect_all('"'numpy'"')' in src, \
+    assert 'collect_all("numpy")' in src or "collect_all('numpy')" in src, \
         "Missing: collect_all for numpy"
-    assert 'collect_all("scipy")' in src or 'collect_all('"'scipy'"')' in src, \
+    assert 'collect_all("scipy")' in src or "collect_all('scipy')" in src, \
         "Missing: collect_all for scipy"
 
 

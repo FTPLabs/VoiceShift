@@ -213,10 +213,22 @@ jobs:
             Write-Warning "Certificate/signing step encountered an error: $_"
             Write-Warning "The exe was built successfully and is fully functional — only the signature is missing."
           }
+
+          # Ensure .cer exists so the release-upload step never fails on a missing file.
+          # If cert creation succeeded, this is already present. If it failed, we write a
+          # clear notice so users know no cert was generated rather than seeing a broken file.
+          if (-not (Test-Path "dist\VoiceShift_CodeSign.cer")) {
+            Write-Warning "No certificate was generated — writing placeholder."
+            "No self-signed certificate was generated during this build.`n" +
+            "This does not affect the functionality of VoiceShift.exe.`n" +
+            "See CERTIFICATE_README.txt for details." |
+              Out-File "dist\VoiceShift_CodeSign.cer" -Encoding ASCII
+          }
           exit 0
 
       - name: Generate certificate README
         shell: pwsh
+        continue-on-error: true
         run: |
           $readme = @"
           # VoiceShift Code-Signing Certificate

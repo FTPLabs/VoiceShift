@@ -9,10 +9,11 @@ Processing chain per chunk:
   → Formant shift (cepstral) → Robotic effect → Low-pass EQ
   → Compressor → Reverb → Volume / clip
 
-Stateful IIR filters persist across chunks so there are no boundary
-transients when the chunk boundary falls mid-filter.
+Stateful objects (DC block, IIR filters, robotic comb, reverb delay lines)
+persist across chunks so there are no boundary transients.
 """
 
+import dataclasses
 import logging
 import threading
 from dataclasses import dataclass
@@ -86,9 +87,12 @@ def _formant_shift(audio: np.ndarray, shift_factor: float) -> np.ndarray:
     Shift vocal formants independently of pitch using cepstral liftering.
 
     Algorithm:
-      1. Extract spectral envelope via real cepstrum (low-quefrency lifter).
+      1. Extract spectral envelope via real cepstrum (low-quefrency lifter)
+         using a WINDOWED copy — Hann window reduces spectral leakage for
+         cleaner envelope estimation without affecting output amplitude.
       2. Warp the envelope in frequency by shift_factor.
-      3. Apply the warped envelope to the signal's spectrum.
+      3. Apply the warped envelope correction to the UNWINDOWED spectrum so
+         that output edges are not tapered to zero (no chunk-boundary click).
 
     shift_factor > 1.0 → formants move up   (brighter / child-like)
     shift_factor < 1.0 → formants move down  (deeper / larger vocal tract)
@@ -97,11 +101,12 @@ def _formant_shift(audio: np.ndarray, shift_factor: float) -> np.ndarray:
         return audio
 
     n = len(audio)
-    win = np.hanning(n).astype(DTYPE)
-    x_w = audio * win
+    x64 = audio.astype(np.float64)
+    win = np.hanning(n)
 
-    X = np.fft.rfft(x_w, n=n)
-    log_mag = np.log(np.abs(X) + 1e-10)
+    # Windowed signal — used ONLY to estimate the spectral envelope
+    X_win = np.fft.rfft(x64 * win, n=n)
+    log_mag = np.log(np.abs(X_win) + 1e-10)
 
     # Real cepstrum → separate fine structure from envelope
     cep = np.fft.irfft(log_mag)
@@ -122,25 +127,13 @@ def _formant_shift(audio: np.ndarray, shift_factor: float) -> np.ndarray:
     shifted_idx = np.clip(shifted_idx, 0, num_bins - 1)
     shifted_env = np.interp(src_idx, shifted_idx, log_env)
 
-    # Apply correction: multiply spectrum by exp(shifted_env - original_env)
-    correction = np.exp((shifted_env - log_env).clip(-10, 10)).astype(np.float64)
-    X_shifted = X * correction
+    # Apply correction to UNWINDOWED spectrum → no edge-taper / no chunk click
+    correction = np.exp((shifted_env - log_env).clip(-10, 10))
+    X_raw = np.fft.rfft(x64, n=n)
+    X_shifted = X_raw * correction
 
     out = np.fft.irfft(X_shifted, n=n)
     return out.astype(DTYPE)
-
-
-def _apply_robotic(audio: np.ndarray, amount: float) -> np.ndarray:
-    """Comb filter gives a metallic / vocoder buzz."""
-    if amount < 0.01:
-        return audio
-    freq = 120.0
-    delay = int(SAMPLE_RATE / freq)
-    if delay <= 0 or delay >= len(audio):
-        return audio
-    comb = np.zeros_like(audio)
-    comb[delay:] = audio[:-delay]
-    return (audio * (1.0 - amount) + comb * amount).astype(DTYPE)
 
 
 def _compress(audio: np.ndarray, threshold_db: float, ratio: float) -> np.ndarray:
@@ -154,33 +147,39 @@ def _compress(audio: np.ndarray, threshold_db: float, ratio: float) -> np.ndarra
     rms = float(np.sqrt(np.mean(audio ** 2))) + 1e-10
     if rms <= threshold_lin:
         return audio
-    # Gain reduction
     gain_db = (threshold_db - 20.0 * np.log10(rms)) * (1.0 - 1.0 / ratio)
     gain = 10.0 ** (gain_db / 20.0)
     return (audio * gain).astype(DTYPE)
 
 
-def _reverb(audio: np.ndarray, amount: float) -> np.ndarray:
-    """Simple parallel comb-filter reverb (Schroeder-style, lightweight)."""
-    if amount < 0.01:
-        return audio
-    delays_ms = [37, 41, 53, 61]   # ms
-    decay = 0.5
-    wet = np.zeros_like(audio)
-    for d_ms in delays_ms:
-        d = int(SAMPLE_RATE * d_ms / 1000)
-        if d >= len(audio):
-            continue
-        comb = np.zeros_like(audio)
-        comb[d:] = audio[:-d] * decay
-        wet += comb
-    wet /= len(delays_ms)
-    return (audio * (1.0 - amount) + wet * amount).astype(DTYPE)
-
-
 # ---------------------------------------------------------------------------
-# Stateful filter helpers (persist zi between chunks → no boundary clicks)
+# Stateful DSP classes (all persist state across process() calls)
 # ---------------------------------------------------------------------------
+
+class _DCBlock:
+    """
+    One-pole high-pass at ~30 Hz for DC offset removal.
+
+    Implemented as a vectorized lfilter with persistent state (zi) so
+    there are no boundary transients at chunk edges.
+    Replaces the original sample-by-sample Python loop (was O(n) pure Python).
+    """
+
+    def __init__(self, fc: float = 30.0, sr: int = SAMPLE_RATE):
+        w = 2.0 * np.pi * fc / sr
+        c = 1.0 - w
+        # Transfer function: H(z) = (1 - z^-1) / (1 - c*z^-1)
+        self._b = np.array([1.0, -1.0], dtype=np.float64)
+        self._a = np.array([1.0, -c], dtype=np.float64)
+        # Steady-state initial condition (avoids startup transient)
+        self._zi = signal.lfilter_zi(self._b, self._a)
+
+    def process(self, audio: np.ndarray) -> np.ndarray:
+        out, self._zi = signal.lfilter(
+            self._b, self._a, audio.astype(np.float64), zi=self._zi
+        )
+        return out.astype(DTYPE)
+
 
 class _IIRFilter:
     """Butterworth IIR filter with persistent state across process() calls."""
@@ -213,26 +212,111 @@ class _IIRFilter:
         self._last_cutoff = -1.0
 
 
-class _DCBlock:
-    """One-pole high-pass at ~30 Hz for DC offset removal."""
+class _RoboticComb:
+    """
+    Single-tap comb filter for metallic / robotic buzz.
 
-    def __init__(self, fc: float = 30.0, sr: int = SAMPLE_RATE):
-        w = 2.0 * np.pi * fc / sr
-        self._coeff = 1.0 - w   # pole location ≈ exp(−w)
-        self._x_prev = 0.0
-        self._y_prev = 0.0
+    y[n] = (1−amount)*x[n] + amount*x[n−delay]
 
-    def process(self, audio: np.ndarray) -> np.ndarray:
-        out = np.empty_like(audio)
-        x_prev, y_prev, c = self._x_prev, self._y_prev, self._coeff
-        for i, x in enumerate(audio):
-            y = x - x_prev + c * y_prev
-            out[i] = y
-            x_prev = x
-            y_prev = y
-        self._x_prev = x_prev
-        self._y_prev = y_prev
-        return out
+    Stateful: keeps the last `delay` input samples across chunks so
+    cross-chunk continuity is maintained (no echo reset every 42 ms).
+    Fully vectorized — no Python sample loop.
+    """
+
+    def __init__(self, freq: float = 120.0, sr: int = SAMPLE_RATE):
+        self._delay = max(1, int(sr / freq))       # 400 samples @ 48 kHz
+        self._prev = np.zeros(self._delay, dtype=np.float64)
+
+    def process(self, audio: np.ndarray, amount: float) -> np.ndarray:
+        x = audio.astype(np.float64)
+        n = len(x)
+        d = self._delay
+        # Prepend history so index i-d is always valid for i in [0, n)
+        extended = np.concatenate([self._prev, x])   # length d+n
+        delayed = extended[:n]                         # x[i-d] for i in [0, n)
+        if amount >= 0.01:
+            out = x * (1.0 - amount) + delayed * amount
+        else:
+            out = x
+        # Update history: keep last d samples of the extended input
+        self._prev = extended[-d:]
+        return out.astype(DTYPE)
+
+    def reset(self) -> None:
+        self._prev[:] = 0.0
+
+
+class _CombFilter:
+    """
+    Feedback comb filter: y[n] = x[n] + decay * y[n−delay]
+
+    Used by _Reverb.  All delay values must be >= CHUNK so that a full
+    chunk's reads always come from the previous chunk's state — enabling
+    fully vectorized (no Python loop) processing.
+    """
+
+    def __init__(self, delay_samples: int, decay: float):
+        self._delay = delay_samples
+        self._decay = decay
+        # State: last `delay_samples` output values (y[-d], …, y[-1])
+        self._state = np.zeros(delay_samples, dtype=np.float64)
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        """Return full comb output y = x + decay*y_delayed."""
+        n = len(x)
+        d = self._delay
+        if n <= d:
+            # All delayed reads come from the previous chunk state — vectorized
+            y = x + self._decay * self._state[:n]
+            self._state = np.concatenate([self._state[n:], y])
+        else:
+            # Rare: chunk larger than delay — fall back to loop
+            y = np.empty(n, dtype=np.float64)
+            for i in range(n):
+                y_del = self._state[i] if i < d else y[i - d]
+                y[i] = x[i] + self._decay * y_del
+            self._state = y[-d:]
+        return y
+
+    def reset(self) -> None:
+        self._state[:] = 0.0
+
+
+class _Reverb:
+    """
+    Parallel feedback comb-filter reverb (Schroeder-style).
+
+    Four comb filters with delays > CHUNK (2048 samples @ 48 kHz) so that:
+      • Delay-line reads always refer to the previous chunk → vectorized.
+      • Echo tails decay exponentially across chunk boundaries (true reverb).
+
+    Delay values chosen as prime-ish multiples to avoid constructive
+    interference: 50, 56, 61, 68 ms → 2400, 2688, 2928, 3264 samples.
+    """
+    _DELAYS_SAMPLES = [
+        int(SAMPLE_RATE * ms / 1000)
+        for ms in [50, 56, 61, 68]
+    ]
+    _DECAY = 0.55   # ~0.3 s reverb tail (0.55^5 delays ≈ 5 %)
+
+    def __init__(self):
+        self._filters = [
+            _CombFilter(d, self._DECAY) for d in self._DELAYS_SAMPLES
+        ]
+
+    def process(self, audio: np.ndarray, amount: float) -> np.ndarray:
+        if amount < 0.01:
+            return audio.astype(DTYPE)
+        x = audio.astype(np.float64)
+        comb_out = np.mean(
+            [f.process(x) for f in self._filters], axis=0
+        )
+        # comb_out already contains x plus echoes; blend with dry
+        return (x * (1.0 - amount) + comb_out * amount).astype(DTYPE)
+
+    def reset(self) -> None:
+        for f in self._filters:
+            f.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -249,10 +333,12 @@ class AudioEngine:
         self._output_device: Optional[int] = None
         self._stream: Optional[sd.Stream] = None
 
-        # Stateful DSP objects
+        # Stateful DSP objects (reset on start())
         self._dc_block = _DCBlock()
         self._hp_filter = _IIRFilter("high", order=4)
         self._lp_filter = _IIRFilter("low", order=4)
+        self._robotic = _RoboticComb()
+        self._reverb_fx = _Reverb()
 
     # ------------------------------------------------------------------
     # Public API
@@ -264,7 +350,6 @@ class AudioEngine:
 
     def get_params(self) -> VoiceParams:
         with self._lock:
-            import dataclasses
             return dataclasses.replace(self._params)
 
     def set_devices(self, input_idx: Optional[int], output_idx: Optional[int]) -> None:
@@ -280,10 +365,12 @@ class AudioEngine:
         if self._active:
             return
         self._active = True
-        # Reset filter state so old state from previous session doesn't bleed in
+        # Reset all stateful DSP so old state from a previous session doesn't bleed in
         self._dc_block = _DCBlock()
         self._hp_filter.reset()
         self._lp_filter.reset()
+        self._robotic.reset()
+        self._reverb_fx.reset()
 
         engine = self  # capture for closure
 
@@ -306,13 +393,13 @@ class AudioEngine:
 
                 chunk = _pitch_shift(chunk, p.pitch_semitones)
                 chunk = _formant_shift(chunk, p.formant_shift)
-                chunk = _apply_robotic(chunk, p.robotic_amount)
+                chunk = engine._robotic.process(chunk, p.robotic_amount)
 
                 if p.lowpass_freq <= SAMPLE_RATE / 2 - 200:
                     chunk = engine._lp_filter.process(chunk, p.lowpass_freq, SAMPLE_RATE)
 
                 chunk = _compress(chunk, p.compressor_threshold, p.compressor_ratio)
-                chunk = _reverb(chunk, p.reverb_amount)
+                chunk = engine._reverb_fx.process(chunk, p.reverb_amount)
                 chunk = np.clip(chunk * p.volume_out, -1.0, 1.0).astype(DTYPE)
             except Exception as exc:
                 logger.warning("DSP error: %s", exc)
@@ -361,6 +448,7 @@ class AudioEngine:
         with self._lock:
             p = self._params
 
+        # Fresh stateful objects for one-shot preview (no shared state with live stream)
         dc = _DCBlock()
         audio = dc.process(audio)
         audio = _noise_gate(audio, p.noise_gate_db)
@@ -371,14 +459,19 @@ class AudioEngine:
 
         audio = _pitch_shift(audio, p.pitch_semitones)
         audio = _formant_shift(audio, p.formant_shift)
-        audio = _apply_robotic(audio, p.robotic_amount)
+
+        rob = _RoboticComb()
+        audio = rob.process(audio, p.robotic_amount)
 
         lp = _IIRFilter("low")
         if p.lowpass_freq <= SAMPLE_RATE / 2 - 200:
             audio = lp.process(audio, p.lowpass_freq, SAMPLE_RATE)
 
         audio = _compress(audio, p.compressor_threshold, p.compressor_ratio)
-        audio = _reverb(audio, p.reverb_amount)
+
+        rev = _Reverb()
+        audio = rev.process(audio, p.reverb_amount)
+
         audio = np.clip(audio * p.volume_out, -1.0, 1.0).astype(DTYPE)
 
         sd.play(audio, samplerate=SAMPLE_RATE, device=self._output_device)
