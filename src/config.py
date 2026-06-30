@@ -19,13 +19,22 @@ else:
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
+_PARAM_DEFAULTS = asdict(VoiceParams())
+
+
+def _coerce_params(raw: dict) -> dict:
+    """Fill in missing keys with defaults so old config files stay compatible."""
+    out = dict(_PARAM_DEFAULTS)
+    out.update({k: v for k, v in raw.items() if k in _PARAM_DEFAULTS})
+    return out
+
 
 @dataclass
 class Preset:
     name: str
-    params: dict        # serialised VoiceParams
-    app_rules: list[str] = field(default_factory=list)   # process names this preset applies to
-    excluded_apps: list[str] = field(default_factory=list)  # processes where voice is bypassed
+    params: dict
+    app_rules: list[str] = field(default_factory=list)
+    excluded_apps: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -58,30 +67,77 @@ class AppConfig:
 
 
 def _default_config() -> AppConfig:
-    default_params = asdict(VoiceParams())
     return AppConfig(
         presets=[
             Preset(
                 name="Default",
-                params=default_params,
+                params=asdict(VoiceParams()),
                 app_rules=[],
                 excluded_apps=[],
             ),
             Preset(
                 name="Deep",
-                params=asdict(VoiceParams(pitch_semitones=-4.0, formant_shift=0.85)),
+                params=asdict(VoiceParams(
+                    pitch_semitones=-4.0,
+                    formant_shift=0.82,
+                    highpass_freq=60.0,
+                    lowpass_freq=12000.0,
+                    compressor_threshold=-20.0,
+                    compressor_ratio=5.0,
+                )),
                 app_rules=[],
                 excluded_apps=["discord.exe"],
             ),
             Preset(
                 name="High",
-                params=asdict(VoiceParams(pitch_semitones=5.0, formant_shift=1.2)),
+                params=asdict(VoiceParams(
+                    pitch_semitones=5.0,
+                    formant_shift=1.22,
+                    highpass_freq=120.0,
+                    lowpass_freq=18000.0,
+                    compressor_threshold=-24.0,
+                    compressor_ratio=3.0,
+                )),
                 app_rules=[],
                 excluded_apps=[],
             ),
             Preset(
                 name="Robot",
-                params=asdict(VoiceParams(robotic_amount=0.7, pitch_semitones=2.0)),
+                params=asdict(VoiceParams(
+                    robotic_amount=0.75,
+                    pitch_semitones=2.0,
+                    formant_shift=1.0,
+                    highpass_freq=100.0,
+                    lowpass_freq=8000.0,
+                    compressor_threshold=-18.0,
+                    compressor_ratio=6.0,
+                )),
+                app_rules=[],
+                excluded_apps=[],
+            ),
+            Preset(
+                name="Female",
+                params=asdict(VoiceParams(
+                    pitch_semitones=6.0,
+                    formant_shift=1.35,
+                    highpass_freq=120.0,
+                    lowpass_freq=16000.0,
+                    compressor_threshold=-24.0,
+                    compressor_ratio=3.0,
+                )),
+                app_rules=[],
+                excluded_apps=[],
+            ),
+            Preset(
+                name="Male",
+                params=asdict(VoiceParams(
+                    pitch_semitones=-5.0,
+                    formant_shift=0.78,
+                    highpass_freq=50.0,
+                    lowpass_freq=10000.0,
+                    compressor_threshold=-18.0,
+                    compressor_ratio=5.0,
+                )),
                 app_rules=[],
                 excluded_apps=[],
             ),
@@ -101,7 +157,7 @@ def load() -> AppConfig:
         presets = [
             Preset(
                 name=p["name"],
-                params=p.get("params", asdict(VoiceParams())),
+                params=_coerce_params(p.get("params", {})),
                 app_rules=p.get("app_rules", []),
                 excluded_apps=p.get("excluded_apps", []),
             )
@@ -150,7 +206,7 @@ def set_autostart(enabled: bool) -> None:
     try:
         import winreg
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        exe = sys.executable if not getattr(sys, "frozen", False) else sys.executable
+        exe = sys.executable
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
             if enabled:
                 winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{exe}" --minimised')
